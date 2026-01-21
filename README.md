@@ -1,5 +1,5 @@
 # Dramography
-**A blueprint for the soul of a story.**
+### Who Knew What When
 
 Welcome to **Dramography**, the narrative engine that tears the cover off your favorite novels to show you the gears turning underneath. 
 
@@ -13,13 +13,13 @@ Dramography takes a raw text file (a novel) and runs it through a 5-step pipelin
 
 It generates two main artifacts:
 
-### 1. The God View ☁️
+### 1. The God View 
 This is the omniscient truth. It tracks:
 *   **The Action:** What actually happened.
 *   **The Gap:** Who is wrong? (e.g., Alice thinks Bob is flirting; Bob is actually trying to steal her wallet).
 *   **The Stakes:** What happens if the truth comes out?
 
-### 2. The Swim Lanes 🏊
+### 2. The Swim Lanes 
 This is the logistics tracker. It tracks:
 *   **Timeline:** Minute-by-minute breakdowns.
 *   **Locations:** Where is everyone standing?
