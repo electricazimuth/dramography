@@ -1,0 +1,1149 @@
+# --- Server/Backend Settings --- 
+# select device with
+# export CUDA_VISIBLE_DEVICES=0
+server:
+  host: "127.0.0.1"
+  port: 5000
+  api_key: "not-needed"
+  startup_wait: 420      # seconds to wait for server to start
+  cooldown_wait: 5       # seconds between model switches
+  api_timeout: 800       # timeout for generation requests
+  max_retries: 2
+
+# --- Backend Configuration ---
+backend:
+  type: "llamacpp"  # Options: "llamacpp", "koboldcpp"
+  llama_cpp_server_path: "/home/david/Documents/llama.cpp/build/bin/llama-server"
+  
+  # Default arguments for llama.cpp 32768, 65536, 81920,98304, 122880, 131072 
+  llama_cpp_args:
+    - "-ngl"
+    - "99"
+    - "--jinja"
+
+# --- Paths ---
+paths:
+  model_dir: "/home/david/data/Models/"
+  results_dir: "./pipeline"
+
+# --- Processing Settings ---
+processing:
+  txt_files: 
+    - "books/HeavyWeather.txt"
+    - "books/The_Code_Woosters.txt"
+#    - "books/Jill_the_Reckless.txt"
+#    - "books/Mike_and_Psmith.txt"
+  context_token_limit: 60000
+  chapter_split_string: "=== section break ==="
+  force_regenerate: false
+  prefix: ""  # prefix for output filenames
+
+# --- Generation Settings ---
+steps:
+  step1_summaries:
+    max_tokens: 20000
+    temperature: 1.0
+    top_k: 64
+    top_p: 1.0
+    seed: 69
+    llm_file: mistralai_Mistral-Small-3.1-24B-Instruct-2503-Q6_K_L.gguf
+    ctx_size: 81920
+    prompt: |
+      # Role
+      You are a Narrative Logic Analyst, Data Extraction and Summarization Specialist. Your goal is to convert raw narrative text into structured, machine-readable data used for complex plot tracking.
+
+      # Task
+      Read the provided chapter text and output a JSON object with two main sections:
+      1. A dense chronological summary
+      2. A comprehensive entity registry with alias resolution
+
+      # Output Format
+      You MUST output valid JSON in this exact structure:
+
+      {
+        "chapter_summary": "Dense chronological paragraph here...",
+        "entities": {
+          "characters": [
+            {
+              "primary_name": "Aragorn",
+              "aliases": ["Strider", "The Ranger", "Elessar"],
+              "status_action": "Leads the fellowship through Moria",
+            }
+          ],
+          "objects": [
+            {
+              "primary_name": "Anduril",
+              "aliases": ["The Flame of the West", "Narsil Reforged"],
+              "type": "Weapon",
+              "context": "Wielded by Aragorn; reforged from Narsil",
+              "significance": "high"
+            }
+          ],
+          "locations": [
+            {
+              "primary_name": "Rivendell",
+              "aliases": ["Imladris", "The Last Homely House"],
+              "description": "Elven refuge in the Misty Mountains",
+              "events": ["Council held", "Fellowship formed"]
+            }
+          ]
+        },
+        "relationships": [
+          {
+            "character": "Aragorn",
+            "relation": "wields",
+            "object": "Anduril",
+            "location": "throughout journey"
+          }
+        ]
+      }
+
+      # Guidelines
+
+      ## For chapter_summary:
+      - Write in strictly chronological order
+      - Use dense, factual language
+      - Use canonical/primary names only (no aliases in the summary)
+      - Explicitly state who does what, where, and with which objects
+
+      ## For entities (CRITICAL - Avoid Duplicates):
+      - CANONICAL NAMES: Use the most specific proper name as primary_name
+      - ALIAS RESOLUTION: Group all titles, nicknames, and descriptions under one entity
+        - Example: Don't create separate entries for "The Captain" and "John Smith"
+        - List "The Captain" as an alias of "John Smith"
+      - Object Significance: 
+        - "high" = plot-critical items (The One Ring)
+        - "medium" = character-defining items (Gandalf's staff)
+        - "low" = mentioned but not pivotal (generic supplies)
+      - Consistency: Check against known entities list to use established names
+
+      # Critical Constraints
+      1. Output ONLY valid JSON - no markdown code blocks, no preamble
+      2. Ensure all strings are properly escaped
+      3. Empty arrays are acceptable (e.g., if no objects mentioned: "objects": [])
+      4. Do not duplicate entities - resolve aliases first
+
+      ## For relationships (Optional but Valuable):
+      - Capture key interactions: who owns/wields what, who meets whom, where events occur
+      - Format: {character, relation, object/location}
+
+      # Previous Summaries (for consistency)
+      {{previous}}
+
+      # Input
+      Chapter Number: {{chapter_number}}
+      Text:
+      ```
+      {{chapter}}
+      ```
+      
+  step2_grammar:
+    max_tokens: 10000
+    temperature: 0.8
+    top_k: 64
+    top_p: 1.0
+    seed: 6969
+    llm_file: gpt-oss-20b-MXFP4_UNSLOTH.gguf
+    ctx_size: 65536
+    prompt: |
+      # ROLE
+      You are a Narrative Logic Analyst. Your task is to finalize the "Master Registry" of plot-critical Entities by reconciling a raw pre-processed list against the narrative summaries.
+
+      # INPUT DATA
+      1. Chapter Summaries: The narrative context.
+      2. Pre-Merged Entities: A raw JSON list of entities programmatically extracted and roughly combined.
+
+      # TASK
+      The "Pre-Merged Entities" list contains noise, generic items, and semantic duplicates that the algorithm missed. 
+      You must use the "Chapter Summaries" to validate importance, merge distinct entries that refer to the same entity, and discard non-essential items.
+
+      # GUIDELINES
+
+      ### 1. Characters
+      - Semantic Deduplication: The programmatic list merged names that *looked* similar. You must now merge characters that *are* the same person based on context (e.g., if the summary says "The Captain, whose name is John", merge "The Captain" and "John").
+      - Relevance: Keep only central characters. Discard extras.
+      - Short Ref: Generate a unique 2-letter ID (e.g., Aragorn -> "AR").
+      - Fields: `common_name` (String), `aliases` (Array), `short_ref` (String).
+
+      ### 2. Objects
+      - Filter Aggressively: The raw list contains generic items (e.g., "a chair", "a cigarette"). DELETE them. Keep ONLY plot-critical named items or MacGuffins.
+      - Short Ref: Generate a unique ID prefixed with "Obj" + first 2 letters (e.g., Anduril -> "ObjAN").
+      - Fields: `common_name` (String), `short_ref` (String).
+
+      ### 3. Locations
+      - Standardize: Ensure consistent naming (e.g., convert "The Kitchen" and "Inside the Kitchen" to one entry: "The Kitchen").
+      - Fields: List of strings only.
+
+      # OUTPUT FORMAT
+      Return VALID JSON ONLY. No markdown, no conversational text.
+
+      ```json
+      {
+          "objects": [
+            {"common_name": "item1", "short_ref": "ObjON"},
+            {"common_name": "item2", "short_ref": "ObjTW"}
+          ],
+          "locations": ["Place Name 1", "Place Name 2"],
+          "characters": [
+            {"common_name": "Name", "aliases": ["Alias1", "Alias2"], "short_ref": "ID"},
+            {"common_name": "Name2", "aliases": [], "short_ref": "ID2"}
+          ]
+      }
+      ```
+
+      # INPUTS
+
+      ### Chapter Summaries
+      {{chapters}}
+
+      ### Pre-Merged Entities (Raw Data)
+      {{entities}}
+
+  step3_detail:
+    max_tokens: 16000
+    temperature: 0.8
+    top_k: 64
+    top_p: 1.0
+    seed: 6969
+    ctx_size: 65536
+    llm_file: Qwen3-30B-A3B-Instruct-2507-UD-Q6_K_XL.gguf
+    prompt: |
+      # NARRASTRUCTLINE FARCE ANNOTATION INSTRUCTIONS
+
+      ## 0. Purpose and Role
+
+      You are an **analysis engine**, not a storyteller.
+
+      Your task is to:
+
+      * analyze a *single chapter of narrative text*,
+      * identify **farce-relevant narrative beats**,
+      * output **structured beats only**, using the schema defined below.
+
+      You **must not**:
+
+      * summarize the chapter,
+      * quote or paraphrase text,
+      * invent internal states not supported by the text,
+      * infer future events.
+
+      If no valid beat is present, output an empty `beats` array.
+
+      ---
+
+      ## 1. Input Scope
+
+      You will receive:
+
+      * the text of **one chapter only**,
+      * no prior chapters,
+      * no future context.
+
+      Assume:
+
+      * a persistent global state exists,
+      * but you may only modify it through explicit **state deltas**.
+
+      Do **not** reintroduce characters, objects, or truths unless they change state.
+
+      ---
+
+      ## 2. Output Structure (Mandatory)
+
+      You must output **exactly one JSON object** with this top-level structure:
+
+      ```json
+      {
+        "chapter_context": {
+          "chapter_number": null,
+          "chapter_title": null,
+          "relative_time": null,
+          "chronology_notes": null
+        },
+        "beats": [],
+        "state_carryover_notes": null
+      }
+      ```
+
+      * Fields may be `null` if unknown.
+      * Do not add or remove top-level keys.
+
+      ---
+
+      ## 3. What Counts as a Beat
+
+      A **beat** is an atomic narrative event where **something meaningfully changes** in at least one of the following domains:
+
+      * belief (someone thinks something different)
+      * object state (custodian, location, meaning, visibility)
+      * spatial configuration (who is where, who can see whom)
+      * goal viability (a plan becomes easier, harder, or impossible)
+
+      ### NOT a Beat
+
+      * descriptive prose
+      * dialogue without consequence
+      * emotional tone without action
+      * repetition of an existing misunderstanding
+
+      If nothing changes, produce no beat.
+
+      ---
+
+      ## 4. Beat Identification Rules
+
+      ### 4.1 One Beat = One Dominant Mechanic
+
+      Each beat must have:
+
+      * **exactly one** `primary_mechanic`.
+
+      If two independent changes occur:
+
+      * produce **two separate beats**, even if they occur close together.
+
+      ---
+
+      ## 5. Beat Schema (Required Fields Only)
+
+      Each beat must conform exactly to the following structure.
+
+      ```json
+      {
+        "beat_id": "Generated ID",
+        "beat_type": "farce_complication | misdirection | escalation | reversal | payoff | stall",
+        "scope": "local | cascading",
+        "participants": [],
+
+        "spatiotemporal_frame": {
+          "location": null,
+          "time_marker": null,
+          "entrances_exits": []
+        },
+
+        "primary_mechanic": {
+          "domain": "belief | object | space | goal",
+          "description": "Controlled natural language",
+          "affected_entities": []
+        },
+
+        "state_deltas": {
+          "beliefs": [],
+          "objects": [],
+          "locations": []
+        },
+
+        "farce_logic": {
+          "mistaken_identity": false,
+          "concealment": false,
+          "near_collision": false
+        },
+
+        "cognitive_emotional_layer": null,
+
+        "reader_effect": {
+          "knowledge_change": "none | increased | misled",
+          "comic_tension": "low | medium | high"
+        }
+      }
+      ```
+
+      ---
+
+      ## 6. How to Populate Each Section
+
+      ### 6.1 `beat_id`
+
+      * Generate a unique ID (e.g., `"B_07_02"`).
+      * Must be unique within the chapter.
+
+      ---
+
+      ### 6.2 `beat_type`
+
+      Choose the best match:
+
+      * `farce_complication` – situation becomes harder due to confusion
+      * `misdirection` – false clarity is introduced
+      * `escalation` – stakes or entanglement increase
+      * `reversal` – expectation is overturned
+      * `payoff` – a farcical setup resolves
+      * `stall` – delay or avoidance maintains chaos
+
+      Choose **one only**.
+
+      ---
+
+      ### 6.3 `participants`
+
+      List only characters **actively involved** in the beat.
+
+      Do not include:
+
+      * off-stage characters,
+      * mentioned but uninvolved characters.
+
+      ---
+
+      ### 6.4 `spatiotemporal_frame`
+
+      Use this only if space or timing matters.
+
+      #### Entrances / Exits
+
+      Include only if:
+
+      * concealment,
+      * near-miss,
+      * mistaken presence
+        is involved.
+
+      ```json
+      {
+        "character": "Name",
+        "action": "enter | exit | hide | overhear",
+        "method": "door | window | screen | other"
+      }
+      ```
+
+      If space does not matter, leave arrays empty.
+
+      ---
+
+      ### 6.5 `primary_mechanic` (Mandatory)
+
+      This is the **core reason the beat exists**.
+
+      * `domain` must match the actual change.
+      * `description` must be factual and non-expressive.
+      * `affected_entities` must reference existing IDs.
+
+      Example:
+
+      > “Object changes custodian without either party noticing.”
+
+      ---
+
+      ### 6.6 `state_deltas`
+
+      Populate **only if a state changes**.
+
+      #### Beliefs
+
+      ```json
+      {
+        "holder": "Name",
+        "proposition": "What they believe",
+        "prior_confidence": 0.6,
+        "posterior_confidence": 0.8,
+        "truth_alignment": "true | false | unknown"
+      }
+      ```
+
+      Do not infer beliefs unless the text clearly supports them.
+
+      ---
+
+      #### Objects
+
+      ```json
+      {
+        "object_id": "Object",
+        "attribute": "custodian | location | meaning | visibility",
+        "from": "Previous",
+        "to": "New",
+        "visibility": "noticed | unnoticed | misinterpreted"
+      }
+      ```
+
+      Object movement is central to farce; be precise.
+
+      ---
+
+      ### 6.7 `farce_logic`
+
+      Set flags **only if explicitly supported**.
+
+      * `mistaken_identity`: someone is misidentified
+      * `concealment`: hiding, eavesdropping, secret presence
+      * `near_collision`: two parties narrowly avoid detection
+
+      False by default.
+
+      ---
+
+      ### 6.8 `cognitive_emotional_layer` (Optional)
+
+      Populate **only if the text explicitly shows**:
+
+      * a goal,
+      * an expectation,
+      * a tactic,
+      * a reaction to success/failure.
+
+      If populated, use:
+
+      ```json
+      {
+        "goal_public": null,
+        "goal_private": null,
+        "expectation": null,
+        "action": "Controlled verb",
+        "reality_delta": null,
+        "reaction": null,
+        "emotional_shift": {
+          "from": null,
+          "to": null
+        }
+      }
+      ```
+
+      If uncertain, set this entire field to `null`.
+
+      ---
+
+      ### 6.9 `reader_effect`
+
+      Estimate conservatively.
+
+      * `knowledge_change` reflects **reader**, not characters.
+      * `comic_tension` reflects mechanical entanglement, not humor quality.
+
+      ---
+
+      ## 7. What You Must Not Do
+
+      You must not:
+
+      * quote the text,
+      * paraphrase scenes,
+      * describe tone or style,
+      * invent inner thoughts,
+      * infer motives not textualized,
+      * reference future chapters.
+
+      ---
+
+      ## 8. Abstention Rule (Critical)
+
+      If a field cannot be justified from the text:
+
+      * omit it,
+      * or set it to `null`.
+
+      Abstention is correct behavior.
+
+      ---
+
+      ## 9. Output Validation Checklist (Self-Check)
+
+      Before outputting, verify:
+
+      * JSON is valid
+      * No extra keys
+      * Each beat has exactly one `primary_mechanic`
+      * No prose summaries
+      * Optional sections omitted where unsupported
+
+      ---
+
+      ## 10. Success Condition
+
+      Your output is successful if:
+
+      * the beats could be merged with other chapters’ beats,
+      * no copyrighted text can be reconstructed,
+      * farce mechanics are preserved as state changes.
+
+      ---
+
+      **End of Instructions**
+
+      ## Common Name Grammar
+      The following json object contains our suggested grammar for common names to allow consistent tracking across the book
+      ```json
+      {{grammar}}
+      ```
+
+      ## Narrative Summary
+      {{summary}}
+
+      ## Previous Chapters
+      {{previous}}
+
+      # Input
+      Chapter Number: {{chapter_number}}
+      {{chapter}}
+
+  step4_godview:
+    max_tokens: 16000
+    temperature: 1.0
+    top_k: 64
+    top_p: 1.0
+    seed: 69
+    llm_file: Qwen3-30B-A3B-Instruct-2507-UD-Q6_K_XL.gguf
+    ctx_size: 65536
+    godview_prompt: |
+      # Narrative Logic Analysis: God View Chart Generation (JSON Output)
+      ## Your Role
+      You are a Narrative Logic Analyst and Data Extraction Specialist. Your task is to transform technical chapter analysis JSON objects into a structured God View JSON dataset that reveals the clockwork mechanisms of complex narratives, particularly those involving farce, information asymmetry, and physical logistics.
+
+      ## What You'll Receive
+      - Chapter-by-chapter narrative analysis (JSON format)
+      - A shared grammar file containing authoritative entity names and `short_ref` codes
+      - Chapter summaries and detailed scene breakdowns
+
+      ## What You'll Create
+      A **God View Dataset** in JSON format that tracks time, objects, information asymmetry, and stakes across all scenes in the chapter.
+
+      ---
+
+      ## The "God View" Narrative Dataset
+
+      This dataset combines **Time**, **Location**, **Physical Action**, **Object Movement**, and **Information Asymmetry** into one object per scene.
+
+      ### Field Definitions
+
+      | Field | Type | Purpose | Content Guidelines |
+      |-------|------|---------|-------------------|
+      | **scene_id** | string | Unique identifier | Format: `"ch{chapter}_sc{scene}"` (e.g., `"ch2_sc1"`) |
+      | **chapter** | integer | Chapter number | Numeric value for sorting/filtering |
+      | **scene** | integer | Scene number within chapter | Sequential numbering |
+      | **timestamp** | string | Scene time anchor | Format: `"HH:MM"` or descriptive (e.g., `"10:00"`, `"Dawn"`) |
+      | **location** | string | Physical location | Abbreviated location name (e.g., `"Shop"`, `"Hall"`, `"Garden"`) |
+      | **pov** | string | Viewpoint character | Character `short_ref` from grammar file |
+      | **object_status** | object | MacGuffin tracker | `{object_ref: string, status: string, location: string}` |
+      | **action_truth** | string | What actually happens | Objective reality of the scene (2-8 words) |
+      | **information_gaps** | array | Information asymmetry | Array of objects: `[{character: string, belief: string}]` |
+      | **stakes** | string | Escalating tension | Consequence if lie/misunderstanding persists |
+      | **status_markers** | array | Scene flags | Array of strings: `["LIE"]`, `["TRT"]`, `["CRISIS"]`, etc. |
+
+      ### Status Marker Codes
+      - `"LIE"` = Lie/misunderstanding active
+      - `"TRT"` = Truth revealed/danger imminent
+      - `"CRISIS"` = Maximum tension point
+      - `"GONE"` = Object disappeared
+      - `"MISSING"` = Object location unknown
+
+      ### Key Principles
+      - **Characters & Objects:** Always use `short_ref` codes from the grammar file
+      - **Brevity:** Use fragments, not full sentences (aim for 2-10 words for action/stakes)
+      - **Structured Data:** Use arrays for multiple items (gaps, markers)
+      - **Consistent IDs:** scene_id format ensures unique keys for merging chapters
+
+      ### Template Format
+
+      ```json
+      {
+        "metadata": {
+          "chart_type": "god_view",
+          "chapter": 2
+        },
+        "scenes": [
+          {
+            "scene_id": "ch2_sc1",
+            "chapter": 2,
+            "scene": 1,
+            "timestamp": "10:00",
+            "location": "Store",
+            "pov": "CH1",
+            "object_status": {
+              "object_ref": "Obj1",
+              "status": "purchased",
+              "location": "with CH2"
+            },
+            "action_truth": "CH2 purchases Obj1 first",
+            "information_gaps": [
+              {
+                "character": "CH3",
+                "belief": "thinks CH1 failed"
+              },
+              {
+                "character": "CH2",
+                "belief": "suspects CH1 of theft"
+              }
+            ],
+            "stakes": "If CH1 returns empty-handed, CH3 withdraws support",
+            "status_markers": ["LIE"]
+          },
+          {
+            "scene_id": "ch2_sc2",
+            "chapter": 2,
+            "scene": 2,
+            "timestamp": "14:00",
+            "location": "Manor",
+            "pov": "CH1",
+            "object_status": {
+              "object_ref": "Obj1",
+              "status": "secured",
+              "location": "Safe"
+            },
+            "action_truth": "CH4 warns CH1 to leave",
+            "information_gaps": [
+              {
+                "character": "CH4",
+                "belief": "believes CH1 intends theft (actually does)"
+              }
+            ],
+            "stakes": "If CH1 stays, CH4 will attack",
+            "status_markers": ["LIE"]
+          },
+          {
+            "scene_id": "ch2_sc3",
+            "chapter": 2,
+            "scene": 3,
+            "timestamp": "14:30",
+            "location": "Terrace",
+            "pov": "CH5",
+            "object_status": {
+              "object_ref": "Obj2",
+              "status": "concealed",
+              "location": "Pocket"
+            },
+            "action_truth": "CH5 writes compromising notes",
+            "information_gaps": [
+              {
+                "character": "CH5",
+                "belief": "thinks notes boost confidence"
+              },
+              {
+                "character": "CH6",
+                "belief": "thinks notes are romantic"
+              }
+            ],
+            "stakes": "If CH4 finds Obj2, CH5 faces ruin",
+            "status_markers": ["LIE"]
+          },
+          {
+            "scene_id": "ch2_sc4",
+            "chapter": 2,
+            "scene": 4,
+            "timestamp": "23:00",
+            "location": "Chamber",
+            "pov": "CH1",
+            "object_status": {
+              "object_ref": "Obj1",
+              "status": "missing",
+              "location": "unknown"
+            },
+            "action_truth": "CH1 attempts theft, container empty",
+            "information_gaps": [
+              {
+                "character": "CH2",
+                "belief": "hears noise, assumes CH1"
+              },
+              {
+                "character": "CH1",
+                "belief": "assumes CH2 moved it"
+              }
+            ],
+            "stakes": "CH1 trapped with no Obj1, CH2 approaching",
+            "status_markers": ["GONE", "CRISIS"]
+          },
+          {
+            "scene_id": "ch2_sc5",
+            "chapter": 2,
+            "scene": 5,
+            "timestamp": "23:15",
+            "location": "Corridor",
+            "pov": "CH3",
+            "object_status": {
+              "object_ref": "Obj1",
+              "status": "in transit",
+              "location": "with CH7"
+            },
+            "action_truth": "CH7 passes Obj1 to CH8",
+            "information_gaps": [
+              {
+                "character": "CH7",
+                "belief": "thinks it's a prank"
+              },
+              {
+                "character": "CH3",
+                "belief": "thinks CH1 succeeded"
+              }
+            ],
+            "stakes": "CH3 praises CH1 for theft he didn't commit",
+            "status_markers": ["LIE"]
+          },
+          {
+            "scene_id": "ch2_sc6",
+            "chapter": 2,
+            "scene": 6,
+            "timestamp": "08:00",
+            "location": "Dining",
+            "pov": "CH1",
+            "object_status": {
+              "object_ref": "Obj1",
+              "status": "planted",
+              "location": "CH1's Room"
+            },
+            "action_truth": "CH8 planted Obj1 secretly",
+            "information_gaps": [
+              {
+                "character": "CH1",
+                "belief": "believes innocence"
+              },
+              {
+                "character": "CH4",
+                "belief": "searching rooms now"
+              }
+            ],
+            "stakes": "CH4 approaching CH1's room",
+            "status_markers": ["CRISIS", "TRT"]
+          }
+        ]
+      }
+      ```
+
+      ## How to Use This Dataset
+
+      ### God View Analysis Workflow
+
+      1. **Time Column = Your Anchor**
+        - Clockwork plots depend on precise timing
+        - Query scenes by timestamp to verify character movements
+        - Filter by chapter for continuity checks
+
+      2. **Object Tracking = Plot Hole Prevention**
+        - Query all scenes where `object_status.object_ref === "Obj1"`
+        - Verify continuous location chain
+        - Missing transitions indicate plot holes
+
+      3. **Information Gaps = Comedy/Tension Engine**
+        - Scenes with empty `information_gaps` arrays lack dramatic tension
+        - Count gaps per character to track confusion levels
+        - Filter by `status_markers` to find crisis points
+
+      4. **Stakes Escalation Tracker**
+        - Sort scenes to verify increasing pressure
+        - Flag scenes marked with `"CRISIS"` marker
+
+      ---
+
+      ## Production Guidelines
+
+      ### Using the Grammar File
+      - **ALWAYS** use `short_ref` codes from the grammar file for:
+        - Character names (e.g., `"CH1"`, `"CH2"`, `"PROT"`, `"ANTAG"`)
+        - Object names (e.g., `"Obj1"`, `"Obj2"`, `"McGuffin_A"`)
+        - Location names (abbreviated consistently)
+      - This ensures consistency across all data and prevents confusion
+
+      ### Data Quality Requirements
+      - **scene_id uniqueness:** Format must be `ch{X}_sc{Y}` for global uniqueness
+      - **Consistent typing:** Always use integers for chapter/scene numbers
+      - **Array consistency:** Empty arrays `[]` rather than null for missing gaps/markers
+      - **Timestamp format:** Consistent format across all entries (prefer `"HH:MM"`)
+
+      ### Brevity Requirements
+      - **action_truth:** 2-10 words
+      - **stakes:** 5-20 words
+      - **belief (in gaps):** 3-15 words
+
+      ### Common Mistakes to Avoid
+      1. ❌ Using full character names instead of `short_ref` codes
+      2. ❌ Null values instead of empty arrays for gaps/markers
+      3. ❌ Inconsistent scene_id format (breaks merging)
+      4. ❌ Missing chapter numbers (prevents filtering/sorting)
+      5. ❌ Verbose descriptions (defeats purpose of structured data)
+      6. ❌ Inconsistent timestamp formats within same dataset
+
+      ---
+
+      ## Output Format
+
+      When generating God View dataset from chapter analysis:
+
+      1. **Validate JSON syntax** before output
+      2. **Verify** all `short_ref` codes against grammar file
+      3. **Include metadata** object with chart_type and chapter
+      4. **Output** valid JSON only - no markdown code fences, no explanatory text
+
+      ---
+
+      ## Final Checklist
+
+      Before submitting your JSON dataset, verify:
+
+      - [ ] Valid JSON syntax (test with parser)
+      - [ ] All character references use grammar file `short_ref` codes
+      - [ ] All object references use grammar file `short_ref` codes
+      - [ ] All `scene_id` values follow `ch{X}_sc{Y}` format
+      - [ ] `chapter` and `scene` fields are integers, not strings
+      - [ ] Time progresses logically (timestamps in order within chapter)
+      - [ ] Object locations tracked in every scene where object matters
+      - [ ] `information_gaps` array filled for every scene (empty = tension problem)
+      - [ ] `status_markers` array uses approved codes only
+      - [ ] Metadata object includes all required fields
+      - [ ] Brevity guidelines followed (word counts appropriate)
+      - [ ] Empty arrays `[]` used instead of null for missing data
+
+      ---
+
+      **Remember:** This dataset exists to make the invisible visible through structured data. Well-formed JSON enables programmatic analysis of plot holes, timing inconsistencies, and missing dramatic beats. When the data validates cleanly, the story's clockwork mechanism is sound.
+
+      ---
+
+      # Shared Grammar Lookup
+      This is our shared grammar.
+
+      {{grammar}}
+
+      # Chapter Number: {{chapter_number}}
+
+      ## Chapter Summary
+      {{summary}}
+
+      # Chapter detail
+      {{detail}}
+
+            
+    swimlane_prompt: |
+      # Narrative Logic Analysis: Swim Lane Chart Generation (JSON Output)
+
+      ## Your Role
+      You are a Narrative Logic Analyst and Spatial Tracking Specialist. Your task is to transform technical chapter analysis JSON objects into a structured **Swim Lane** JSON dataset that tracks physical location and character movements, making spatial logic visible across the narrative timeline.
+
+      ## What You'll Receive
+      - Chapter-by-chapter narrative analysis (JSON format)
+      - A shared grammar file containing authoritative entity names and `short_ref` codes
+      - Chapter summaries and detailed scene breakdowns
+
+      ## What You'll Create
+      A **Swim Lane Dataset** in JSON format that tracks physical locations for each character and important object across time.
+
+      ---
+
+      ## The "Swim Lane" Location Matrix Dataset
+
+      This dataset tracks **physical location** for each character and object across time, making spatial logic visible and enabling collision detection and continuity verification.
+
+      ### Field Definitions
+
+      | Field | Type | Purpose | Content |
+      |-------|------|---------|---------|
+      | **timestamp** | string | Timeline anchor | Format: `"HH:MM"` or descriptive |
+      | **chapter** | integer | Chapter number | For merging/filtering |
+      | **scene** | integer | Scene number | Sequential numbering for reference |
+      | **locations** | object | Character positions | `{character_ref: location_string}` |
+      | **object_locations** | object | Object positions | `{object_ref: location_string}` |
+      | **movement_markers** | object | Movement notation | `{character_ref: marker_string}` where marker = `"↓"`, `"↑"`, `"→"`, `"RUNNING"` |
+      | **conflict_summary** | string | Scene summary | Brief description of collision/tension (5-12 words) |
+
+      ### Movement Notation Values
+      - `"↓"` = Character descending/exiting
+      - `"↑"` = Character ascending/entering
+      - `"→"` = Moving toward
+      - `"RUNNING"` = Character in rapid motion
+      - `"DROPPED"` = Object status (in object_locations)
+      - `"MISSING"` = Object status (in object_locations)
+
+      ### Key Principles
+      - **Characters & Objects:** Always use `short_ref` codes from the grammar file
+      - **Location Consistency:** Use the same location names throughout (reference grammar file)
+      - **Movement Tracking:** Use movement_markers to show transitions between locations
+      - **Collision Detection:** Multiple characters in same location = potential encounter
+
+      ### Template Format
+
+      ```json
+      {
+        "metadata": {
+          "chart_type": "swim_lane",
+          "chapter": 2,
+          "tracked_characters": ["Char_A", "Char_B", "Char_C", "Char_D"],
+          "tracked_objects": ["Object_1"]
+        },
+        "timeline": [
+          {
+            "timestamp": "23:00",
+            "chapter": 2,
+            "scene": 4,
+            "locations": {
+              "Char_A": "Room_A",
+              "Char_B": "Hallway",
+              "Char_C": "Study",
+              "Char_D": "Garden"
+            },
+            "object_locations": {
+              "Object_1": "MISSING"
+            },
+            "movement_markers": {},
+            "conflict_summary": "Char_B knocks on Room_A door"
+          },
+          {
+            "timestamp": "23:05",
+            "chapter": 2,
+            "scene": 4,
+            "locations": {
+              "Char_A": "Window",
+              "Char_B": "Room_A",
+              "Char_C": "Hallway",
+              "Char_D": "Garden"
+            },
+            "object_locations": {
+              "Object_1": "Char_D's Pocket"
+            },
+            "movement_markers": {
+              "Char_A": "↓",
+              "Char_C": "↑"
+            },
+            "conflict_summary": "Char_A escapes as Char_B enters"
+          },
+          {
+            "timestamp": "23:10",
+            "chapter": 2,
+            "scene": 4,
+            "locations": {
+              "Char_A": "Garden",
+              "Char_B": "Window",
+              "Char_C": "Room_A",
+              "Char_D": "Garden"
+            },
+            "object_locations": {
+              "Object_1": "Char_D's Pocket"
+            },
+            "movement_markers": {
+              "Char_B": "↓"
+            },
+            "conflict_summary": "Char_A lands on Char_D, Char_B looks out"
+          },
+          {
+            "timestamp": "23:15",
+            "chapter": 2,
+            "scene": 5,
+            "locations": {
+              "Char_A": "Garden",
+              "Char_B": "Garden",
+              "Char_C": "Window",
+              "Char_D": "Garden"
+            },
+            "object_locations": {
+              "Object_1": "DROPPED"
+            },
+            "movement_markers": {
+              "Char_C": "↓",
+              "Char_D": "RUNNING"
+            },
+            "conflict_summary": "Char_C sees Char_B climbing, thinks Char_B is thief"
+          }
+        ]
+      }
+      ```
+
+      ## How to Use This Dataset
+
+      ### Swim Lane Analysis Workflow
+
+      1. **Character Path Tracking**
+        - Filter timeline by character in `locations` object
+        - Verify no teleportation between locations
+        - Check `movement_markers` for logical transitions
+        - Follow one character's vertical path to verify continuity
+
+      2. **Collision Detection**
+        - Query timeline entries where multiple characters share location
+        - Cross-reference with `conflict_summary` to verify encounter
+        - Horizontal scan of each timestamp reveals simultaneous positions
+
+      3. **Object Proximity Analysis**
+        - Track which characters are in same location as object
+        - Verify only proximate characters can interact
+        - Detect when object changes hands or moves
+
+      4. **Spatial Logic Verification**
+        - Count location appearances per timestamp
+        - Three instances of "Garden" = three-way collision imminent
+        - Verify physical possibility of movements within time elapsed
+
+      ---
+
+      ## Production Guidelines
+
+      ### Using the Grammar File
+      - **ALWAYS** use `short_ref` codes from the grammar file for:
+        - Character names (e.g., `"CH1"`, `"CH2"`, `"PROT"`, `"ANTAG"`)
+        - Object names (e.g., `"Obj1"`, `"Obj2"`, `"McGuffin_A"`)
+        - Location names (abbreviated consistently)
+      - This ensures consistency across all data and prevents confusion
+
+      ### Data Quality Requirements
+      - **Timestamp consistency:** Use same format throughout (prefer `"HH:MM"`)
+      - **Character tracking:** Include ALL major characters in metadata.tracked_characters
+      - **Object tracking:** Include important MacGuffins in metadata.tracked_objects
+      - **Empty objects:** Use `{}` for movement_markers if no movement that timestamp
+      - **Location names:** Maintain exact spelling/capitalization throughout chapter
+
+      ### Brevity Requirements
+      - **conflict_summary:** 5-12 words
+      - **location names:** Short, memorable (e.g., `"Garden"` not `"The East Garden Behind the Manor"`)
+
+      ### When to Create Swim Lane Data
+      Create Swim Lane datasets when:
+      - Chapter involves chase sequences or complex character movements
+      - Spatial logistics are critical to plot (hiding, sneaking, near-misses)
+      - Multiple characters moving through same spaces at different times
+      - Physical positioning creates dramatic irony or tension
+      - Tracking who-can-see-whom is important
+
+      **Skip Swim Lane** for dialogue-heavy scenes in single locations with minimal movement.
+
+      ### Common Mistakes to Avoid
+      1. ❌ Using full character names instead of `short_ref` codes
+      2. ❌ Inconsistent location names (e.g., "Garden" vs "The Garden")
+      3. ❌ Null values instead of empty objects for movement_markers
+      4. ❌ Missing characters from locations object (all tracked characters should appear)
+      5. ❌ Verbose conflict summaries
+      6. ❌ Inconsistent timestamp formats within chapter
+      7. ❌ Not including scene numbers for reference
+
+      ---
+
+      ## Output Format
+
+      When generating Swim Lane dataset from chapter analysis:
+
+      1. **Validate JSON syntax** before output
+      2. **Verify** all `short_ref` codes against grammar file
+      3. **Include metadata** with tracked_characters and tracked_objects arrays
+      4. **Include scene numbers** in each timeline entry for cross-referencing
+      5. **Output** valid JSON only - no markdown code fences, no explanatory text
+
+      ---
+
+      ## Final Checklist
+
+      Before submitting your JSON dataset, verify:
+
+      - [ ] Valid JSON syntax (test with parser)
+      - [ ] All character references use grammar file `short_ref` codes
+      - [ ] All object references use grammar file `short_ref` codes
+      - [ ] All tracked characters appear in every timeline entry's locations object
+      - [ ] `chapter` and `scene` fields are integers, not strings
+      - [ ] Timestamps progress logically (in order within chapter)
+      - [ ] Location names are consistent throughout (exact spelling/caps)
+      - [ ] Movement markers use approved notation only
+      - [ ] Metadata includes tracked_characters and tracked_objects arrays
+      - [ ] Empty objects `{}` used instead of null for missing movement_markers
+      - [ ] Conflict summaries are concise (5-12 words)
+      - [ ] Physical movements are possible in elapsed time
+
+      ---
+
+      **Remember:** This dataset exists to make spatial logic visible through structured data. Well-formed Swim Lane JSON enables programmatic detection of impossible movements, character collisions, and continuity errors. When characters' paths validate cleanly, the story's spatial choreography is sound.
+
+      ---
+
+      # Shared Grammar Lookup
+      This is our shared grammar.
+
+      {{grammar}}
+
+      # Chapter Number: {{chapter_number}}
+
+      ## Chapter Summary
+      {{summary}}
+
+      # Chapter detail
+      {{detail}}

@@ -1,0 +1,549 @@
+# --- Server/Backend Settings --- 
+# select device with
+# export CUDA_VISIBLE_DEVICES=0
+server:
+  host: "127.0.0.1"
+  port: 5000
+  api_key: "not-needed"
+  startup_wait: 420      # seconds to wait for server to start
+  cooldown_wait: 5       # seconds between model switches
+  api_timeout: 800       # timeout for generation requests
+  max_retries: 2
+
+# --- Backend Configuration ---
+backend:
+  type: "llamacpp"  # Options: "llamacpp", "koboldcpp"
+  llama_cpp_server_path: "/home/david/Documents/llama.cpp/build/bin/llama-server"
+  
+  # Default arguments for llama.cpp 32768, 65536, 81920,98304, 122880, 131072 
+  llama_cpp_args:
+    - "-ngl"
+    - "99"
+    - "--jinja"
+
+# --- Paths ---
+paths:
+  model_dir: "/home/david/data/Models/"
+  results_dir: "/home/david/Documents/graphrag/pipeline"
+  output_dir: "/home/david/Documents/graphrag/experiments/experiments_step2"
+
+# --- Processing Settings ---
+processing:
+  txt_files: 
+    - "books/HeavyWeather.txt"
+  #  - "books/Jill_the_Reckless.txt"
+  #  - "books/Mike_and_Psmith.txt"
+  context_token_limit: 60000
+  chapter_split_string: "=== section break ==="
+  force_regenerate: false
+  prefix: ""  # prefix for output filenames
+
+# --- Generation Settings ---
+steps:
+  step2_grammar:
+    max_tokens: 10000
+    temperature: 0.8
+    top_k: 64
+    top_p: 1.0
+    seed: 6969
+    llm_file: Nemotron-3-Nano-30B-A3B-UD-Q5_K_XL.gguf
+    llm_files:
+    #  - Qwen3-VL-32B-Instruct-UD-Q6_K_XL.gguf
+    #  - GLM-4.7-Flash-UD-Q6_K_XL.gguf
+    #  - Nemotron-3-Nano-30B-A3B-UD-Q5_K_XL.gguf
+    #  - Nemotron-Super-49B-v1_5-IQ4_XS.gguf
+    #  - Qwen3-Coder-30B-A3B-Instruct-UD-Q6_K_XL.gguf
+    #  - Qwen3-VL-30B-A3B-Thinking-UD-Q6_K_XL.gguf
+    #  - Qwen3-VL-30B-A3B-Instruct-UD-Q6_K_XL.gguf
+    #  - Qwen3-30B-A3B-Instruct-2507-UD-Q6_K_XL.gguf
+    #  - Qwen3-30B-A3B-Thinking-2507-UD-Q6_K_XL.gguf
+    #  - Seed-OSS-36B-Instruct-UD-Q5_K_XL.gguf
+    #  - granite-4.0-h-small-UD-Q5_K_XL.gguf
+    #  - Qwen3-30B-A3B-Instruct-2507-UD-Q4_K_XL.gguf
+    #  - gpt-oss-20b-mxfp4.gguf
+    #  - gpt-oss-20b-MXFP4_UNSLOTH.gguf
+      - gpt-oss-20b-UD-Q8_K_XL.gguf
+    ctx_size: 65536
+    prompt: |
+      # ROLE
+      You are a Narrative Logic Analyst. Your task is to ingest multiple chapter summaries and consolidate them into a single, deduplicated, authoritative Master Registry of plot-critical Entities.
+
+      # TASK
+      Analyze the provided JSON chapter data, each chapter contains a summary and a list of entities (Characters, Objects, Locations).
+      Your goal is to aggregate, deduplicate, and standardize all entities from all chapters into a single canonical master list based on the most common usage in the text.
+
+      # GUIDELINES
+      ### 1. Characters
+      - Deduplication: You must merge characters referring to the same person. (e.g., If Ch1 has "Strider" and Ch2 has "Aragorn", merge them into one entry with `common_name`: "Aragorn" and `aliases`: ["Strider"]).
+      - Selection: Include only central plot-relevant characters only. Exclude bystanders, extras, or unnamed background characters.
+      - Short Ref: Generate a unique 2-letter ID based on their name (e.g., Aragorn -> "AR"). If "AR" is already taken, use the first and last letter (e.g., "AN").
+      - Fields: `common_name` (String), `aliases` (Array of Strings), `short_ref` (String).
+
+      ### 2. Objects
+      - Significance: Extract ONLY plot-critical items (MacGuffins, key evidence, named weapons, magical artifacts, vital clues). Discard generic items (e.g., "a sword", "a chair") unless they are unique named entities.
+      - Short Ref: Generate a unique ID prefixed with "Obj" + the first 2 letters of the object name (e.g., Anduril -> "ObjAN").
+      - Fields: `common_name` (String), `short_ref` (String).
+
+      ### 3. Locations
+      - Granularity: Aim for the "Building/Settlement" level (e.g., "Rivendell", "The Prancing Pony"). Do not include countries (like "Middle Earth") unless the scene takes place broadly in the wild.
+      - Deduplication: Merge variations (e.g., "Elrond's House" and "The Last Homely House" -> "Rivendell").
+      - Fields: List of strings only.
+
+      Remember: You are to list only the names as they appear in the text, attempt to dedupe and alias them and you are to avoid duplicates. 
+      You should use the most common or canonical name for each.
+      Respond only with json of objects, locations, characters in the structure shown below in the example.
+
+      We will pass in all chapters summaries in the output data, compare all the chapter information and create a final authoritive data object.
+
+      # OUTPUT FORMAT
+      You must respond with valid JSON only. Do not include markdown formatting (like ```json), explanations, or conversational text.
+      Structure your response exactly like this:
+
+      ```json
+      {
+          "objects": [
+            {common name": "item1", "short_ref": "ObjON"},
+            {common name": "object2", "short_ref": "ObjTW"},
+            {common name": "thing3", "short_ref": "ObjTN"},
+            ],
+          "locations": ["place1", "place2", "place3", ...],
+          "characters": [
+            {"common name": "person1", "aliases": ["aka1"], "short_ref": "NS"},
+            {"common name": "person2", "aliases": ["aka2"], "short_ref": "RT"},
+            {"common name": "person3", "aliases": ["aka3"], "short_ref": "PR"},
+            ]
+      }
+      ```
+
+      # Chapters to parse
+      {{chapters}}
+
+    compare_prompt: |
+      # ROLE
+      You are a Narrative Logic Analyst. Your task is to finalize the "Master Registry" of plot-critical Entities by reconciling a raw pre-processed list against the narrative summaries.
+
+      # INPUT DATA
+      1. Chapter Summaries: The narrative context.
+      2. Pre-Merged Entities: A raw JSON list of entities programmatically extracted and roughly combined.
+
+      # TASK
+      The "Pre-Merged Entities" list contains noise, generic items, and semantic duplicates that the algorithm missed. 
+      You must use the "Chapter Summaries" to validate importance, merge distinct entries that refer to the same entity, and discard non-essential items.
+
+      # GUIDELINES
+
+      ### 1. Characters
+      - Semantic Deduplication: The programmatic list merged names that *looked* similar. You must now merge characters that *are* the same person based on context (e.g., if the summary says "The Captain, whose name is John", merge "The Captain" and "John").
+      - Relevance: Keep only central characters. Discard extras.
+      - Short Ref: Generate a unique 2-letter ID (e.g., Aragorn -> "AR").
+      - Fields: `common_name` (String), `aliases` (Array), `short_ref` (String).
+
+      ### 2. Objects
+      - Filter Aggressively: The raw list contains generic items (e.g., "a chair", "a cigarette"). DELETE them. Keep ONLY plot-critical named items or MacGuffins.
+      - Short Ref: Generate a unique ID prefixed with "Obj" + first 2 letters (e.g., Anduril -> "ObjAN").
+      - Fields: `common_name` (String), `short_ref` (String).
+
+      ### 3. Locations
+      - Standardize: Ensure consistent naming (e.g., convert "The Kitchen" and "Inside the Kitchen" to one entry: "The Kitchen").
+      - Fields: List of strings only.
+
+      # OUTPUT FORMAT
+      Return VALID JSON ONLY. No markdown, no conversational text.
+
+      ```json
+      {
+          "objects": [
+            {"common_name": "item1", "short_ref": "ObjON"},
+            {"common_name": "item2", "short_ref": "ObjTW"}
+          ],
+          "locations": ["Place Name 1", "Place Name 2"],
+          "characters": [
+            {"common_name": "Name", "aliases": ["Alias1", "Alias2"], "short_ref": "ID"},
+            {"common_name": "Name2", "aliases": [], "short_ref": "ID2"}
+          ]
+      }
+      ```
+
+      # INPUTS
+
+      ### Chapter Summaries
+      {{chapters}}
+
+      ### Pre-Merged Entities (Raw Data)
+      {{entities}}
+
+  step3_detail:
+    max_tokens: 16000
+    temperature: 0.8
+    top_k: 64
+    top_p: 1.0
+    seed: 6969
+    ctx_size: 65536
+    llm_file: Qwen3-30B-A3B-Instruct-2507-UD-Q6_K_XL.gguf
+    prompt: |
+      # NARRASTRUCTLINE FARCE ANNOTATION INSTRUCTIONS
+
+      ## 0. Purpose and Role
+
+      You are an **analysis engine**, not a storyteller.
+
+      Your task is to:
+
+      * analyze a *single chapter of narrative text*,
+      * identify **farce-relevant narrative beats**,
+      * output **structured beats only**, using the schema defined below.
+
+      You **must not**:
+
+      * summarize the chapter,
+      * quote or paraphrase text,
+      * invent internal states not supported by the text,
+      * infer future events.
+
+      If no valid beat is present, output an empty `beats` array.
+
+      ---
+
+      ## 1. Input Scope
+
+      You will receive:
+
+      * the text of **one chapter only**,
+      * no prior chapters,
+      * no future context.
+
+      Assume:
+
+      * a persistent global state exists,
+      * but you may only modify it through explicit **state deltas**.
+
+      Do **not** reintroduce characters, objects, or truths unless they change state.
+
+      ---
+
+      ## 2. Output Structure (Mandatory)
+
+      You must output **exactly one JSON object** with this top-level structure:
+
+      ```json
+      {
+        "chapter_context": {
+          "chapter_number": null,
+          "chapter_title": null,
+          "relative_time": null,
+          "chronology_notes": null
+        },
+        "beats": [],
+        "state_carryover_notes": null
+      }
+      ```
+
+      * Fields may be `null` if unknown.
+      * Do not add or remove top-level keys.
+
+      ---
+
+      ## 3. What Counts as a Beat
+
+      A **beat** is an atomic narrative event where **something meaningfully changes** in at least one of the following domains:
+
+      * belief (someone thinks something different)
+      * object state (custodian, location, meaning, visibility)
+      * spatial configuration (who is where, who can see whom)
+      * goal viability (a plan becomes easier, harder, or impossible)
+
+      ### NOT a Beat
+
+      * descriptive prose
+      * dialogue without consequence
+      * emotional tone without action
+      * repetition of an existing misunderstanding
+
+      If nothing changes, produce no beat.
+
+      ---
+
+      ## 4. Beat Identification Rules
+
+      ### 4.1 One Beat = One Dominant Mechanic
+
+      Each beat must have:
+
+      * **exactly one** `primary_mechanic`.
+
+      If two independent changes occur:
+
+      * produce **two separate beats**, even if they occur close together.
+
+      ---
+
+      ## 5. Beat Schema (Required Fields Only)
+
+      Each beat must conform exactly to the following structure.
+
+      ```json
+      {
+        "beat_id": "Generated ID",
+        "beat_type": "farce_complication | misdirection | escalation | reversal | payoff | stall",
+        "scope": "local | cascading",
+        "participants": [],
+
+        "spatiotemporal_frame": {
+          "location": null,
+          "time_marker": null,
+          "entrances_exits": []
+        },
+
+        "primary_mechanic": {
+          "domain": "belief | object | space | goal",
+          "description": "Controlled natural language",
+          "affected_entities": []
+        },
+
+        "state_deltas": {
+          "beliefs": [],
+          "objects": [],
+          "locations": []
+        },
+
+        "farce_logic": {
+          "mistaken_identity": false,
+          "concealment": false,
+          "near_collision": false
+        },
+
+        "cognitive_emotional_layer": null,
+
+        "reader_effect": {
+          "knowledge_change": "none | increased | misled",
+          "comic_tension": "low | medium | high"
+        }
+      }
+      ```
+
+      ---
+
+      ## 6. How to Populate Each Section
+
+      ### 6.1 `beat_id`
+
+      * Generate a unique ID (e.g., `"B_07_02"`).
+      * Must be unique within the chapter.
+
+      ---
+
+      ### 6.2 `beat_type`
+
+      Choose the best match:
+
+      * `farce_complication` – situation becomes harder due to confusion
+      * `misdirection` – false clarity is introduced
+      * `escalation` – stakes or entanglement increase
+      * `reversal` – expectation is overturned
+      * `payoff` – a farcical setup resolves
+      * `stall` – delay or avoidance maintains chaos
+
+      Choose **one only**.
+
+      ---
+
+      ### 6.3 `participants`
+
+      List only characters **actively involved** in the beat.
+
+      Do not include:
+
+      * off-stage characters,
+      * mentioned but uninvolved characters.
+
+      ---
+
+      ### 6.4 `spatiotemporal_frame`
+
+      Use this only if space or timing matters.
+
+      #### Entrances / Exits
+
+      Include only if:
+
+      * concealment,
+      * near-miss,
+      * mistaken presence
+        is involved.
+
+      ```json
+      {
+        "character": "Name",
+        "action": "enter | exit | hide | overhear",
+        "method": "door | window | screen | other"
+      }
+      ```
+
+      If space does not matter, leave arrays empty.
+
+      ---
+
+      ### 6.5 `primary_mechanic` (Mandatory)
+
+      This is the **core reason the beat exists**.
+
+      * `domain` must match the actual change.
+      * `description` must be factual and non-expressive.
+      * `affected_entities` must reference existing IDs.
+
+      Example:
+
+      > “Object changes custodian without either party noticing.”
+
+      ---
+
+      ### 6.6 `state_deltas`
+
+      Populate **only if a state changes**.
+
+      #### Beliefs
+
+      ```json
+      {
+        "holder": "Name",
+        "proposition": "What they believe",
+        "prior_confidence": 0.6,
+        "posterior_confidence": 0.8,
+        "truth_alignment": "true | false | unknown"
+      }
+      ```
+
+      Do not infer beliefs unless the text clearly supports them.
+
+      ---
+
+      #### Objects
+
+      ```json
+      {
+        "object_id": "Object",
+        "attribute": "custodian | location | meaning | visibility",
+        "from": "Previous",
+        "to": "New",
+        "visibility": "noticed | unnoticed | misinterpreted"
+      }
+      ```
+
+      Object movement is central to farce; be precise.
+
+      ---
+
+      ### 6.7 `farce_logic`
+
+      Set flags **only if explicitly supported**.
+
+      * `mistaken_identity`: someone is misidentified
+      * `concealment`: hiding, eavesdropping, secret presence
+      * `near_collision`: two parties narrowly avoid detection
+
+      False by default.
+
+      ---
+
+      ### 6.8 `cognitive_emotional_layer` (Optional)
+
+      Populate **only if the text explicitly shows**:
+
+      * a goal,
+      * an expectation,
+      * a tactic,
+      * a reaction to success/failure.
+
+      If populated, use:
+
+      ```json
+      {
+        "goal_public": null,
+        "goal_private": null,
+        "expectation": null,
+        "action": "Controlled verb",
+        "reality_delta": null,
+        "reaction": null,
+        "emotional_shift": {
+          "from": null,
+          "to": null
+        }
+      }
+      ```
+
+      If uncertain, set this entire field to `null`.
+
+      ---
+
+      ### 6.9 `reader_effect`
+
+      Estimate conservatively.
+
+      * `knowledge_change` reflects **reader**, not characters.
+      * `comic_tension` reflects mechanical entanglement, not humor quality.
+
+      ---
+
+      ## 7. What You Must Not Do
+
+      You must not:
+
+      * quote the text,
+      * paraphrase scenes,
+      * describe tone or style,
+      * invent inner thoughts,
+      * infer motives not textualized,
+      * reference future chapters.
+
+      ---
+
+      ## 8. Abstention Rule (Critical)
+
+      If a field cannot be justified from the text:
+
+      * omit it,
+      * or set it to `null`.
+
+      Abstention is correct behavior.
+
+      ---
+
+      ## 9. Output Validation Checklist (Self-Check)
+
+      Before outputting, verify:
+
+      * JSON is valid
+      * No extra keys
+      * Each beat has exactly one `primary_mechanic`
+      * No prose summaries
+      * Optional sections omitted where unsupported
+
+      ---
+
+      ## 10. Success Condition
+
+      Your output is successful if:
+
+      * the beats could be merged with other chapters’ beats,
+      * no copyrighted text can be reconstructed,
+      * farce mechanics are preserved as state changes.
+
+      ---
+
+      **End of Instructions**
+
+      ## Common Name Grammar
+      The following json object contains our suggested grammar for common names to allow consistent tracking across the book
+      ```json
+      {{grammar}}
+      ```
+
+      ## Narrative Summary
+      {{summary}}
+
+      ## Previous Chapters
+      {{previous}}
+
+      # Input
+      Chapter Number: {{chapter_number}}
+      {{chapter}}

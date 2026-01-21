@@ -1,0 +1,88 @@
+# --- Server/Backend Settings --- 
+# select device with
+# export CUDA_VISIBLE_DEVICES=0
+server:
+  host: "127.0.0.1"
+  llm_port: 5000
+  embedding_port: 5001
+  api_key: "not-needed"
+  startup_wait: 420      # seconds to wait for server to start
+  cooldown_wait: 5       # seconds between model switches
+  api_timeout: 800       # timeout for generation requests
+  max_retries: 2
+
+# --- Backend Configuration ---
+backend:
+  type: "llamacpp"  # Options: "llamacpp"
+ 
+  # Default arguments for llama.cpp
+  llama_cpp_args:
+    - "-ngl"
+    - "99"
+    - "--ctx-size"
+    - "131072"
+    - "--jinja"
+
+# --- Paths ---
+paths:
+  results_dir: "./embeddings"
+
+
+# --- Processing Settings ---
+processing:
+  txt_file: "books/heavyweather.txt"
+  chapter_split_string: "=== section break ==="
+  force_regenerate: false
+  prefix: ""  # prefix for output filenames
+
+# --- Generation Settings ---
+generation:
+  max_tokens: 10000
+  temperature: 1.0
+  top_k: 64
+  top_p: 1.0
+  seed: 6969
+  
+prompts:
+  extract: |
+    # ROLE
+    You are an expert Narrative Logic Analyst and data engineer. Your goal is to extract structured data from successive fiction book chapters.
+    We are building a Knowledge Graph to identify the authoritative list of core characters, places, and objects. To do this, we need you to extract entities that are *active participants* in the narrative within this chunk.
+
+    Here is the text chunk:
+    """
+    {{chapter}}
+    """
+
+    ### INSTRUCTIONS:
+
+    1. **Identify Entities:** Extract distinct characters, specific locations, and significant objects.
+      - **Ignore** atmospheric background elements (e.g., "the wind," "the crowd," "a generic table") unless they specifically drive the plot.
+      - **Ignore** metaphorical entities (e.g., "Death" if used abstractly).
+
+    2. **Resolve Aliases LOCALLY:** 
+      - If the text refers to "John," "Mr. Smith," and "The Baker," and the context implies they are the same person *within this chunk*, group them under one authoritative name (e.g., "John Smith").
+      - If you are unsure if two names refer to the same person, keep them separate.
+
+    3. **Capture Semantic Descriptions (Crucial for later merging):**
+      - Provide a description of *visual traits* and *role* in this specific scene. This will be used to vector-match this entity with mentions in other chapters.
+
+    4. **Map Interactions (Crucial for Graph Centrality):**
+      - List exactly which other entities this entity interacted with (spoke to, touched, visited, fought).
+
+    ### OUTPUT FORMAT:
+
+    Return the output as a valid JSON object with a single key "entities" containing a list of objects.
+
+    JSON Structure:
+    {
+      "entities": [
+        {
+          "name": "The most formal or common name used in this chunk",
+          "type": "CHARACTER" | "LOCATION" | "OBJECT",
+          "aliases": ["List", "of", "other", "names/titles", "used", "here"],
+          "description": "A dense, 1-2 sentence description of their physical appearance and specific actions in this text.",
+          "interactions": ["Name of Entity 1", "Name of Entity 2"]
+        }
+      ]
+    }

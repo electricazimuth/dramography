@@ -1,0 +1,148 @@
+# --- Server/Backend Settings --- 
+# select device with
+# export CUDA_VISIBLE_DEVICES=0
+server:
+  host: "127.0.0.1"
+  port: 5000
+  api_key: "not-needed"
+  startup_wait: 420      # seconds to wait for server to start
+  cooldown_wait: 5       # seconds between model switches
+  api_timeout: 800       # timeout for generation requests
+  max_retries: 2
+
+# --- Backend Configuration ---
+backend:
+  type: "llamacpp"  # Options: "llamacpp", "koboldcpp"
+  llama_cpp_server_path: "/home/david/Documents/llama.cpp/build/bin/llama-server"
+  koboldcpp_script_path: "/home/david/Documents/koboldcpp/koboldcpp.py"
+  
+  # Default arguments for llama.cpp
+  llama_cpp_args:
+    - "-ngl"
+    - "99"
+    - "--ctx-size"
+    - "65536"
+    - "--jinja"
+  
+  # Default arguments for koboldcpp
+  koboldcpp_args:
+    - "--usecublas"
+    - "normal"
+    - "--contextsize"
+    - "65536"
+    - "--gpulayers"
+    - "99"
+
+# --- Paths ---
+paths:
+  model_dir: "/home/david/data/Models/bench"
+  results_dir: "./summard"
+
+# --- Model Filtering ---
+model_filter:
+  min_size_gb: 2      # null to disable
+  max_size_gb: 29     # null to disable
+
+# --- Processing Settings ---
+processing:
+  txt_file: "books/heavyweather.txt"
+  chapter_split_string: "=== section break ==="
+  force_regenerate: false
+  prefix: ""  # prefix for output filenames
+
+# --- Generation Settings ---
+generation:
+  max_tokens: 10000
+  temperature: 0.6
+  top_k: 64
+  top_p: 0.95
+  seed: 6969
+  prompt_template: |
+    # Role
+    You are a Narrative Logic Analyst, Data Extraction and Summarization Specialist. Your goal is to convert raw narrative text into structured, machine-readable data used for complex plot tracking.
+
+    # Task
+    Read the provided chapter text and output a JSON object with two main sections:
+    1. A dense chronological summary
+    2. A comprehensive entity registry with alias resolution
+
+    # Output Format
+    You MUST output valid JSON in this exact structure:
+
+    {
+      "chapter_summary": "Dense chronological paragraph here...",
+      "entities": {
+        "characters": [
+          {
+            "primary_name": "Aragorn",
+            "aliases": ["Strider", "The Ranger", "Elessar"],
+            "status_action": "Leads the fellowship through Moria",
+          }
+        ],
+        "objects": [
+          {
+            "primary_name": "Andúril",
+            "aliases": ["The Flame of the West", "Narsil Reforged"],
+            "type": "Weapon",
+            "context": "Wielded by Aragorn; reforged from Narsil",
+            "significance": "high"
+          }
+        ],
+        "locations": [
+          {
+            "primary_name": "Rivendell",
+            "aliases": ["Imladris", "The Last Homely House"],
+            "description": "Elven refuge in the Misty Mountains",
+            "events": ["Council held", "Fellowship formed"]
+          }
+        ]
+      },
+      "relationships": [
+        {
+          "character": "Aragorn",
+          "relation": "wields",
+          "object": "Andúril",
+          "location": "throughout journey"
+        }
+      ]
+    }
+
+    # Guidelines
+
+    ## For chapter_summary:
+    - Write in strictly chronological order
+    - Use dense, factual language
+    - Use canonical/primary names only (no aliases in the summary)
+    - Explicitly state who does what, where, and with which objects
+
+    ## For entities (CRITICAL - Avoid Duplicates):
+    - CANONICAL NAMES: Use the most specific proper name as primary_name
+    - ALIAS RESOLUTION: Group all titles, nicknames, and descriptions under one entity
+      - Example: Don't create separate entries for "The Captain" and "John Smith"
+      - List "The Captain" as an alias of "John Smith"
+    - Object Significance: 
+      - "high" = plot-critical items (The One Ring)
+      - "medium" = character-defining items (Gandalf's staff)
+      - "low" = mentioned but not pivotal (generic supplies)
+    - Consistency: Check against known entities list to use established names
+
+    # Critical Constraints
+    1. Output ONLY valid JSON - no markdown code blocks, no preamble
+    2. Ensure all strings are properly escaped
+    3. Empty arrays are acceptable (e.g., if no objects mentioned: "objects": [])
+    4. Do not duplicate entities - resolve aliases first
+
+    ## For relationships (Optional but Valuable):
+    - Capture key interactions: who owns/wields what, who meets whom, where events occur
+    - Format: {character, relation, object/location}
+
+    # Previous Summaries (for consistency)
+    {{previous}}
+
+    # Input
+    Chapter Number: {{chapter_number}}
+    Text:
+    ```
+    {{chapter}}
+    ```
+

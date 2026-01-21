@@ -1,0 +1,57 @@
+# --- Server/Backend Settings --- 
+server:
+  host: "127.0.0.1"
+  llm_port: 5000       # Port where llama-server is running with -m chat_model.gguf
+  embedding_port: 5001 # Port where llama-server is running with -m embedding_model.gguf --embedding
+  api_key: "not-needed"
+  max_retries: 2
+
+# --- Paths ---
+paths:
+  results_dir: "./graph_output"
+
+# --- Processing Settings ---
+processing:
+  txt_file: "books/heavyweather.txt"
+  chapter_split_string: "=== section break ==="
+  force_regenerate: false
+
+# --- Graph Logic Settings ---
+logic:
+  resolution_threshold: 0.69  # 0.0 to 1.0. Higher = stricter merging of aliases.
+  centrality_threshold: 0.09  # 0.0 to 1.0. Lower = includes more minor characters.
+
+# --- Generation Settings ---
+generation:
+  max_tokens: 10000
+  temperature: 0.1 # Keep low for JSON consistency
+  top_p: 0.95
+  
+prompts:
+  extract: |
+    You are a Narrative Logic Analyst. Extract structured data from this fiction chapter.
+    We are building a Knowledge Graph to identify the authoritative list of core characters, places, and objects. To do this, we need you to extract entities that are *active participants* in the narrative within this chunk.
+    
+    Input Text:
+    """
+    {{chapter}}
+    """
+
+    ### INSTRUCTIONS:
+    1. Identify **active** characters, specific locations, and pivotal objects.
+    2. Ignore background/atmospheric mentions.
+    3. **Crucial:** Provide a detailed description of their role/appearance in this chunk to help identify them later, this should be a dense, 1-2 sentence description of their physical appearance and specific actions in this text.
+    4. **Crucial:** List specific names of other entities they interact with.
+
+    ### OUTPUT FORMAT (JSON ONLY):
+    {
+      "entities": [
+        {
+          "name": "The common name used in this chunk",
+          "type": "CHARACTER" | "LOCATION" | "OBJECT",
+          "aliases": ["Nicknames", "Titles"],
+          "description": "Visual and role description in this scene.",
+          "interactions": ["Name1", "Name2"]
+        }
+      ]
+    }
