@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Narrative Logic Viewer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background-color: #f8f9fa;
+        }
+        .table-container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status-badge {
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            margin: 2px;
+            display: inline-block;
+        }
+        .info-gap-item {
+            margin-bottom: 5px;
+            padding: 5px;
+            background: #f8f9fa;
+            border-left: 3px solid #0d6efd;
+            font-size: 0.9rem;
+        }
+        .movement-marker {
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #0d6efd;
+        }
+        .chapter-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .file-input-section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .table th {
+            background-color: #f8f9fa;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .table-responsive {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+        .scene-id {
+            font-weight: bold;
+            color: #667eea;
+        }
+        .timestamp {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+        }
+        .object-status {
+            background: #fff3cd;
+            padding: 5px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-4">
+        <h1 class="text-center mb-4">Narrative Logic Viewer</h1>
+        
+        <!-- File Input Section -->
+        <div class="file-input-section">
+            <h3 class="mb-3">Load JSON Files</h3>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label for="godViewFile" class="form-label">God View JSON:</label>
+                    <input type="file" class="form-control" id="godViewFile" accept=".json">
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label for="swimLaneFile" class="form-label">Swim Lane JSON:</label>
+                    <input type="file" class="form-control" id="swimLaneFile" accept=".json">
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="loadFiles()">Load & Display</button>
+        </div>
+
+        <!-- God View Table -->
+        <div id="godViewContainer" class="table-container" style="display:none;">
+            <h2 class="mb-3">God View</h2>
+            <div id="godViewMetadata" class="alert alert-info"></div>
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover" id="godViewTable">
+                    <thead>
+                        <tr>
+                            <th>Scene</th>
+                            <th>Time</th>
+                            <th>Location</th>
+                            <th>POV</th>
+                            <th>Object Status</th>
+                            <th>Action (Truth)</th>
+                            <th>Information Gaps</th>
+                            <th>Stakes</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="godViewBody"></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Swim Lane Table -->
+        <div id="swimLaneContainer" class="table-container" style="display:none;">
+            <h2 class="mb-3">Swim Lane View</h2>
+            <div id="swimLaneMetadata" class="alert alert-info"></div>
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover" id="swimLaneTable">
+                    <thead id="swimLaneHeader"></thead>
+                    <tbody id="swimLaneBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let godViewData = null;
+        let swimLaneData = null;
+
+        function loadFiles() {
+            const godViewFile = document.getElementById('godViewFile').files[0];
+            const swimLaneFile = document.getElementById('swimLaneFile').files[0];
+
+            if (godViewFile) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        godViewData = JSON.parse(e.target.result);
+                        renderGodView(godViewData);
+                    } catch (error) {
+                        alert('Error parsing God View JSON: ' + error.message);
+                    }
+                };
+                reader.readAsText(godViewFile);
+            }
+
+            if (swimLaneFile) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        swimLaneData = JSON.parse(e.target.result);
+                        renderSwimLane(swimLaneData);
+                    } catch (error) {
+                        alert('Error parsing Swim Lane JSON: ' + error.message);
+                    }
+                };
+                reader.readAsText(swimLaneFile);
+            }
+        }
+
+        function renderGodView(data) {
+            document.getElementById('godViewContainer').style.display = 'block';
+            
+            // Render metadata
+            const metadataDiv = document.getElementById('godViewMetadata');
+            metadataDiv.innerHTML = `
+                <strong>Book:</strong> ${data.metadata.source_book || 'N/A'} | 
+                <strong>Chapters:</strong> ${Array.isArray(data.metadata.chapters) ? data.metadata.chapters.join(', ') : data.metadata.chapter} | 
+                <strong>Generated:</strong> ${new Date(data.metadata.generated_timestamp).toLocaleString()}
+            `;
+
+            // Render table
+            const tbody = document.getElementById('godViewBody');
+            tbody.innerHTML = '';
+
+            data.scenes.forEach(scene => {
+                const row = document.createElement('tr');
+                
+                // Scene ID
+                const sceneCell = document.createElement('td');
+                sceneCell.innerHTML = `<span class="scene-id">${scene.scene_id}</span><br><small>Ch ${scene.chapter}</small>`;
+                row.appendChild(sceneCell);
+
+                // Timestamp
+                const timeCell = document.createElement('td');
+                timeCell.innerHTML = `<span class="timestamp">${scene.timestamp}</span>`;
+                row.appendChild(timeCell);
+
+                // Location
+                const locCell = document.createElement('td');
+                locCell.textContent = scene.location;
+                row.appendChild(locCell);
+
+                // POV
+                const povCell = document.createElement('td');
+                povCell.textContent = scene.pov;
+                row.appendChild(povCell);
+
+                // Object Status
+                const objCell = document.createElement('td');
+                if (scene.object_status) {
+                    objCell.innerHTML = `
+                        <div class="object-status">
+                            <strong>${scene.object_status.object_ref}</strong><br>
+                            <small>${scene.object_status.status}</small><br>
+                            <small><em>${scene.object_status.location}</em></small>
+                        </div>
+                    `;
+                }
+                row.appendChild(objCell);
+
+                // Action Truth
+                const actionCell = document.createElement('td');
+                actionCell.textContent = scene.action_truth;
+                row.appendChild(actionCell);
+
+                // Information Gaps
+                const gapsCell = document.createElement('td');
+                if (scene.information_gaps && scene.information_gaps.length > 0) {
+                    scene.information_gaps.forEach(gap => {
+                        const gapDiv = document.createElement('div');
+                        gapDiv.className = 'info-gap-item';
+                        gapDiv.innerHTML = `<strong>${gap.character}:</strong> ${gap.belief}`;
+                        gapsCell.appendChild(gapDiv);
+                    });
+                }
+                row.appendChild(gapsCell);
+
+                // Stakes
+                const stakesCell = document.createElement('td');
+                stakesCell.textContent = scene.stakes;
+                row.appendChild(stakesCell);
+
+                // Status Markers
+                const statusCell = document.createElement('td');
+                if (scene.status_markers && scene.status_markers.length > 0) {
+                    scene.status_markers.forEach(marker => {
+                        const badge = document.createElement('span');
+                        badge.className = 'badge status-badge';
+                        badge.textContent = marker;
+                        
+                        // Color code badges
+                        if (marker === 'CRISIS') badge.classList.add('bg-danger');
+                        else if (marker === 'TRT') badge.classList.add('bg-warning');
+                        else if (marker === 'LIE') badge.classList.add('bg-primary');
+                        else if (marker === 'GONE' || marker === 'MISSING') badge.classList.add('bg-secondary');
+                        else badge.classList.add('bg-info');
+                        
+                        statusCell.appendChild(badge);
+                    });
+                }
+                row.appendChild(statusCell);
+
+                tbody.appendChild(row);
+            });
+        }
+
+        function renderSwimLane(data) {
+            document.getElementById('swimLaneContainer').style.display = 'block';
+            
+            // Render metadata
+            const metadataDiv = document.getElementById('swimLaneMetadata');
+            metadataDiv.innerHTML = `
+                <strong>Book:</strong> ${data.metadata.source_book || 'N/A'} | 
+                <strong>Chapters:</strong> ${Array.isArray(data.metadata.chapters) ? data.metadata.chapters.join(', ') : data.metadata.chapter} | 
+                <strong>Generated:</strong> ${new Date(data.metadata.generated_timestamp).toLocaleString()}<br>
+                <strong>Tracked Characters:</strong> ${data.metadata.tracked_characters.join(', ')}<br>
+                <strong>Tracked Objects:</strong> ${data.metadata.tracked_objects.join(', ')}
+            `;
+
+            // Build header dynamically
+            const thead = document.getElementById('swimLaneHeader');
+            const headerRow = document.createElement('tr');
+            
+            headerRow.innerHTML = '<th>Time</th><th>Scene</th>';
+            
+            // Add character columns
+            data.metadata.tracked_characters.forEach(char => {
+                headerRow.innerHTML += `<th>${char}</th>`;
+            });
+            
+            // Add object columns
+            data.metadata.tracked_objects.forEach(obj => {
+                headerRow.innerHTML += `<th>${obj}</th>`;
+            });
+            
+            headerRow.innerHTML += '<th>Conflict</th>';
+            thead.innerHTML = '';
+            thead.appendChild(headerRow);
+
+            // Render table body
+            const tbody = document.getElementById('swimLaneBody');
+            tbody.innerHTML = '';
+
+            data.timeline.forEach(entry => {
+                const row = document.createElement('tr');
+                
+                // Timestamp
+                const timeCell = document.createElement('td');
+                timeCell.innerHTML = `<span class="timestamp">${entry.timestamp}</span>`;
+                row.appendChild(timeCell);
+
+                // Scene
+                const sceneCell = document.createElement('td');
+                sceneCell.innerHTML = `<small>Ch ${entry.chapter}<br>Sc ${entry.scene}</small>`;
+                row.appendChild(sceneCell);
+
+                // Character locations
+                data.metadata.tracked_characters.forEach(char => {
+                    const cell = document.createElement('td');
+                    const location = entry.locations[char] || '-';
+                    const movement = entry.movement_markers[char] || '';
+                    
+                    cell.innerHTML = `${location}`;
+                    if (movement) {
+                        cell.innerHTML += ` <span class="movement-marker">${movement}</span>`;
+                    }
+                    row.appendChild(cell);
+                });
+
+                // Object locations
+                data.metadata.tracked_objects.forEach(obj => {
+                    const cell = document.createElement('td');
+                    const location = entry.object_locations[obj] || '-';
+                    cell.textContent = location;
+                    
+                    if (location === 'DROPPED' || location === 'MISSING') {
+                        cell.classList.add('table-warning');
+                    }
+                    row.appendChild(cell);
+                });
+
+                // Conflict summary
+                const conflictCell = document.createElement('td');
+                conflictCell.textContent = entry.conflict_summary;
+                row.appendChild(conflictCell);
+
+                tbody.appendChild(row);
+            });
+        }
+
+        // Allow drag and drop
+        const fileInputs = document.querySelectorAll('input[type="file"]');
+        fileInputs.forEach(input => {
+            input.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.currentTarget.classList.add('border-primary');
+            });
+            
+            input.addEventListener('dragleave', (e) => {
+                e.currentTarget.classList.remove('border-primary');
+            });
+            
+            input.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('border-primary');
+                if (e.dataTransfer.files.length > 0) {
+                    e.currentTarget.files = e.dataTransfer.files;
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,207 @@
+# --- Server/Backend Settings --- 
+# select device with
+# export CUDA_VISIBLE_DEVICES=0
+server:
+  host: "127.0.0.1"
+  port: 5000
+  api_key: "not-needed"
+  startup_wait: 420      # seconds to wait for server to start
+  cooldown_wait: 5       # seconds between model switches
+  api_timeout: 800       # timeout for generation requests
+  max_retries: 2
+
+# --- Backend Configuration ---
+backend:
+  type: "llamacpp"  # Options: "llamacpp", "koboldcpp"
+  llama_cpp_server_path: "/path/llama.cpp/build/bin/llama-server"
+  
+  # Default arguments for llama.cpp 32768, 65536, 81920,98304, 122880, 131072 
+  llama_cpp_args:
+    - "-ngl"
+    - "99"
+    - "--jinja"
+
+# --- Paths ---
+paths:
+  model_dir: "/path/Models/"
+  results_dir: "./pipeline"
+
+# --- Processing Settings ---
+processing:
+  txt_files: 
+    - "input/textdata_1.txt"
+    - "input/textdata_2.txt"
+    - "input/textdata_3.txt"
+
+  context_token_limit: 32768
+  chapter_split_string: "=== section break ==="
+  force_regenerate: false
+  prefix: ""  # prefix for output filenames
+
+# --- Generation Settings ---
+steps:
+  step1_summaries:
+    max_tokens: 20000
+    temperature: 1.0
+    top_k: 64
+    top_p: 1.0
+    seed: 42
+    llm_file: Meta-Llama-3.1-8B-Instruct-Q4_K_L.gguf
+    ctx_size: 32768
+    prompt: |
+      # Role
+      You are a Narrative Logic Analyst, Data Extraction and Summarization Specialist. Your goal is to convert raw narrative text into structured, machine-readable data used for complex plot tracking.
+
+      # Task
+      Read the provided chapter text and output a JSON object with two main sections:
+      1. A dense chronological summary
+      2. A comprehensive entity registry with alias resolution
+
+      # Output Format
+      You MUST output valid JSON
+
+      # Previous Summaries (for consistency)
+      {{previous}}
+
+      # Input
+      Chapter Number: {{chapter_number}}
+      Text:
+      ```
+      {{chapter}}
+      ```
+      
+  step2_grammar:
+    max_tokens: 10000
+    temperature: 0.8
+    top_k: 64
+    top_p: 1.0
+    seed: 42
+    llm_file: Meta-Llama-3.1-8B-Instruct-Q4_K_L.gguf
+    ctx_size: 32768
+    prompt: |
+      # ROLE
+      You are a Narrative Logic Analyst. Your task is to finalize the "Master Registry" of plot-critical Entities by reconciling a raw pre-processed list against the narrative summaries.
+
+      # INPUT DATA
+      1. Chapter Summaries: The narrative context.
+      2. Pre-Merged Entities: A raw JSON list of entities programmatically extracted and roughly combined.
+
+      # TASK
+      The "Pre-Merged Entities" list contains noise, generic items, and semantic duplicates that the algorithm missed. 
+      You must use the "Chapter Summaries" to validate importance, merge distinct entries that refer to the same entity, and discard non-essential items.
+
+      # INPUTS
+
+      ### Chapter Summaries
+      {{chapters}}
+
+      ### Pre-Merged Entities (Raw Data)
+      {{entities}}
+
+  step3_detail:
+    max_tokens: 16000
+    temperature: 0.8
+    top_k: 64
+    top_p: 1.0
+    seed: 42
+    ctx_size: 32768
+    llm_file: Meta-Llama-3.1-8B-Instruct-Q4_K_L.gguf
+    prompt: |
+      # NARRASTRUCTLINE ANNOTATION INSTRUCTIONS
+
+      ## 0. Purpose and Role
+
+      You are an **analysis engine**, not a storyteller.
+
+      Your task is to:
+
+      * analyze a *single chapter of narrative text*,
+      * identify **farce-relevant narrative beats**,
+      * output **structured beats only**, using the schema defined below.
+
+      You **must not**:
+
+      * summarize the chapter,
+      * quote or paraphrase text,
+      * invent internal states not supported by the text,
+      * infer future events.
+
+      If no valid beat is present, output an empty `beats` array.
+
+      ## Common Name Grammar
+      The following json object contains our suggested grammar for common names to allow consistent tracking across the book
+      ```json
+      {{grammar}}
+      ```
+
+      ## Narrative Summary
+      {{summary}}
+
+      ## Previous Chapters
+      {{previous}}
+
+      # Input
+      Chapter Number: {{chapter_number}}
+      {{chapter}}
+
+  step4_godview:
+    max_tokens: 16000
+    temperature: 1.0
+    top_k: 64
+    top_p: 1.0
+    seed: 42
+    llm_file: Meta-Llama-3.1-8B-Instruct-Q4_K_L.gguf
+    ctx_size: 32768
+    godview_prompt: |
+      # Narrative Logic Analysis: God View Chart Generation (JSON Output)
+      ## Your Role
+      You are a Narrative Logic Analyst and Data Extraction Specialist. Your task is to transform technical chapter analysis JSON objects into a structured God View JSON dataset that reveals the clockwork mechanisms of complex narratives, particularly those involving farce, information asymmetry, and physical logistics.
+
+      ## What You'll Receive
+      - Chapter-by-chapter narrative analysis (JSON format)
+      - A shared grammar file containing authoritative entity names and `short_ref` codes
+      - Chapter summaries and detailed scene breakdowns
+
+      ## What You'll Create
+      A **God View Dataset** in JSON format that tracks time, objects, information asymmetry, and stakes across all scenes in the chapter.
+
+      # Shared Grammar Lookup
+      This is our shared grammar.
+
+      {{grammar}}
+
+      # Chapter Number: {{chapter_number}}
+
+      ## Chapter Summary
+      {{summary}}
+
+      # Chapter detail
+      {{detail}}
+
+            
+    swimlane_prompt: |
+      # Narrative Logic Analysis: Swim Lane Chart Generation (JSON Output)
+
+      ## Your Role
+      You are a Narrative Logic Analyst and Spatial Tracking Specialist. Your task is to transform technical chapter analysis JSON objects into a structured **Swim Lane** JSON dataset that tracks physical location and character movements, making spatial logic visible across the narrative timeline.
+
+      ## What You'll Receive
+      - Chapter-by-chapter narrative analysis (JSON format)
+      - A shared grammar file containing authoritative entity names and `short_ref` codes
+      - Chapter summaries and detailed scene breakdowns
+
+      ## What You'll Create
+      A **Swim Lane Dataset** in JSON format that tracks physical locations for each character and important object across time.
+
+      # Shared Grammar Lookup
+      This is our shared grammar.
+
+      {{grammar}}
+
+      # Chapter Number: {{chapter_number}}
+
+      ## Chapter Summary
+      {{summary}}
+
+      # Chapter detail
+      {{detail}}
