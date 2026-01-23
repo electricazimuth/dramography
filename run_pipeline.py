@@ -211,6 +211,7 @@ class LlamaServer:
             time.sleep(2)
         raise TimeoutError("Server failed to start within the allocated time.")
 
+
 class LLMClient:
     """Handles prompt generation requests with Retries and Validation."""
     def __init__(self, config: PipelineConfig):
@@ -218,20 +219,31 @@ class LLMClient:
 
     def generate(self, prompt: str, step_config: Dict[str, Any], debug_context: str = "unknown", 
                  save_dir: Path = None, is_json: bool = True) -> str:
+        
+        # Extract initial seed
+        current_seed = int(step_config.get('seed', -1))
+
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": step_config.get('max_tokens', 2048),
             "temperature": step_config.get('temperature', 0.8),
             "top_k": step_config.get('top_k', 64),
             "top_p": step_config.get('top_p', 0.95),
-            "seed": step_config.get('seed', -1)
+            "seed": current_seed
         }
 
         attempts = 0
         max_attempts = self.config.max_retries + 1
+        result = None  # Initialize result to capture it for logging
 
         while attempts < max_attempts:
             attempts += 1
+            
+            # Increment seed on retries to avoid repeating the same output failure
+            if attempts > 1:
+                payload['seed'] += 1
+                logger.info(f"Incrementing seed to {payload['seed']} for retry.")
+
             logger.info(f"Generation Attempt {attempts}/{max_attempts} for {debug_context}")
 
             try:
@@ -268,8 +280,38 @@ class LLMClient:
             if attempts < max_attempts:
                 time.sleep(3)
         
-        raise RuntimeError(f"Failed to generate valid output after {max_attempts} attempts.")
+        # --- LOGGING FAILURE DETAILS ---
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # Clean debug_context for filename usage
+            safe_context = "".join(c for c in debug_context if c.isalnum() or c in ('_', '-'))
+            filename = f"runtime_error_{safe_context}_{timestamp}.log"
+            
+            # Use save_dir if available, otherwise current directory
+            log_path = (save_dir / filename) if save_dir else Path(filename)
+            
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write(f"Context: {debug_context}\n")
+                f.write(f"Timestamp: {timestamp}\n")
+                f.write("="*50 + "\n")
+                f.write("PAYLOAD SENT (Final Attempt):\n")
+                f.write("="*50 + "\n")
+                f.write(json.dumps(payload, indent=2, ensure_ascii=False))
+                f.write("\n\n")
+                f.write("="*50 + "\n")
+                f.write("LAST RECEIVED RESULT:\n")
+                f.write("="*50 + "\n")
+                if result:
+                    f.write(json.dumps(result, indent=2, ensure_ascii=False))
+                else:
+                    f.write("No result received (e.g., Connection Error or Timeout).")
 
+            logger.error(f"Diagnostic failure log saved to: {log_path}")
+        except Exception as log_err:
+            logger.error(f"Could not write runtime error log: {log_err}")
+
+        raise RuntimeError(f"Failed to generate valid output after {max_attempts} attempts.")
+   
 class EntityProcessor:
     """Handles programmatic merging and cleaning of entities before LLM processing."""
     def __init__(self, fuzz_threshold=0.9):
@@ -418,13 +460,34 @@ def run_step1_summaries(config: PipelineConfig, server: LlamaServer, client: LLM
     ctx_size = step_cfg.get('ctx_size', 8192)
 
     logger.info(f"=== Starting Step 1: Summaries ({len(chapters)} chapters) [Ctx: {ctx_size}] ===")
-    server.start(step_cfg['llm_file'], ctx_size=ctx_size)
+
+    # PRE-CHECK: Check if we actually need to start the server
+    needs_generation = False
+    if config.force_regenerate:
+        needs_generation = True
+    else:
+        for i in range(len(chapters)):
+            filename = f"{config.prefix}chapter_{i + 1:03d}.json"
+            if not (output_dir / filename).exists():
+                needs_generation = True
+                break
+            # Also check validity if it exists
+            content = load_result(output_dir, filename)
+            if not JSONParser.clean_and_validate(content):
+                needs_generation = True
+                break
+
+    if needs_generation:
+        server.start(step_cfg['llm_file'], ctx_size=ctx_size)
+    else:
+        logger.info("All Step 1 outputs exist and are valid. Skipping server startup.")
     
     generated_outputs = []
     for i, chapter_text in enumerate(chapters):
         chapter_num = i + 1
         filename = f"{config.prefix}chapter_{chapter_num:03d}.json"
         
+        # Load existing if available
         if not config.force_regenerate and (output_dir / filename).exists():
             content = load_result(output_dir, filename)
             if JSONParser.clean_and_validate(content):
@@ -432,6 +495,7 @@ def run_step1_summaries(config: PipelineConfig, server: LlamaServer, client: LLM
                 generated_outputs.append(content)
                 continue
 
+        # If we reached here, server must be running
         logger.info(f"Processing Chapter {chapter_num}...")
         previous_context = create_rolling_context(generated_outputs, config.context_token_limit) if generated_outputs else "No previous chapters."
         
@@ -456,6 +520,7 @@ def run_step2_grammar(config: PipelineConfig, server: LlamaServer, client: LLMCl
 
     logger.info(f"=== Starting Step 2: Grammar Consolidation [Ctx: {ctx_size}] ===")
 
+    # PRE-CHECK
     if not config.force_regenerate and (output_dir / filename).exists():
         content = load_result(output_dir, filename)
         if JSONParser.clean_and_validate(content):
@@ -479,6 +544,7 @@ def run_step2_grammar(config: PipelineConfig, server: LlamaServer, client: LLMCl
     merged_entities_str = json.dumps(merged_entities, indent=2)
     save_result(output_dir, f"{config.prefix}programmatic_entity_merge.json", merged_entities_str)
 
+    # Only start server now that we know we need to generate
     server.start(step_cfg['llm_file'], ctx_size=ctx_size)
 
     prompt = step_cfg['prompt'].replace("{{chapters}}", combined_summaries)
@@ -504,8 +570,27 @@ def run_step3_detail(config: PipelineConfig, server: LlamaServer, client: LLMCli
 
     logger.info(f"=== Starting Step 3: Detailed Extraction ({len(chapters)} chapters) [Ctx: {ctx_size}] ===")
 
+    # PRE-CHECK
+    needs_generation = False
+    if config.force_regenerate:
+        needs_generation = True
+    else:
+        for i in range(len(chapters)):
+            filename = f"{config.prefix}chapter_{i + 1:03d}_details.json"
+            if not (output_dir / filename).exists():
+                needs_generation = True
+                break
+            if not JSONParser.clean_and_validate(load_result(output_dir, filename)):
+                needs_generation = True
+                break
+    
+    if needs_generation:
+        server.start(step_cfg['llm_file'], ctx_size=ctx_size)
+    else:
+        logger.info("All Step 3 outputs exist and are valid. Skipping server startup.")
+        return
+
     grammar_output = get_master_grammar(config, current_results_dir)
-    server.start(step_cfg['llm_file'], ctx_size=ctx_size)
 
     # Load previously generated Step 1 files for context
     step1_outputs = []
@@ -557,8 +642,35 @@ def run_step4_godview(config: PipelineConfig, server: LlamaServer, client: LLMCl
 
     logger.info(f"=== Starting Step 4: God View & Swim Lane ({num_chapters} chapters) [Ctx: {ctx_size}] ===")
 
+    # PRE-CHECK
+    needs_generation = False
+    if config.force_regenerate:
+        needs_generation = True
+    else:
+        for i in range(num_chapters):
+            chapter_num = i + 1
+            # Check Godview
+            if prompt_godview_template:
+                file_god = f"{config.prefix}chapter_{chapter_num:03d}_godview.json"
+                if not (output_dir / file_god).exists() or not JSONParser.clean_and_validate(load_result(output_dir, file_god)):
+                    needs_generation = True
+                    break
+            # Check Swimlane
+            if prompt_swimlane_template:
+                file_swim = f"{config.prefix}chapter_{chapter_num:03d}_swimlane.json"
+                if not (output_dir / file_swim).exists() or not JSONParser.clean_and_validate(load_result(output_dir, file_swim)):
+                    needs_generation = True
+                    break
+            
+            if needs_generation: break
+
+    if needs_generation:
+        server.start(step_cfg['llm_file'], ctx_size=ctx_size)
+    else:
+        logger.info("All Step 4 outputs exist and are valid. Skipping server startup.")
+        return
+
     grammar_json_str = get_master_grammar(config, current_results_dir)
-    server.start(step_cfg['llm_file'], ctx_size=ctx_size)
 
     for i in range(num_chapters):
         chapter_num = i + 1
